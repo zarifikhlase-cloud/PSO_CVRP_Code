@@ -1,0 +1,179 @@
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+random.seed(42)
+np.random.seed(42)
+
+# =============================
+# قراءة ملف VRP
+# =============================
+def read_vrp(filename):
+    with open(filename) as f:
+        lines = f.readlines()
+    
+    dim = capacity = depot = None
+    coords, demands = {}, {}
+    section = None
+    
+    for line in lines:
+        if 'DIMENSION' in line: dim = int(line.split(':')[1])
+        elif 'CAPACITY' in line: capacity = int(line.split(':')[1])
+        elif 'NODE_COORD_SECTION' in line: section = 'coord'
+        elif 'DEMAND_SECTION' in line: section = 'demand'
+        elif 'DEPOT_SECTION' in line: section = 'depot'
+        elif section == 'coord':
+            parts = line.split()
+            if len(parts) == 3: coords[int(parts[0])] = (float(parts[1]), float(parts[2]))
+        elif section == 'demand':
+            parts = line.split()
+            if len(parts) == 2: demands[int(parts[0])] = int(parts[1])
+        elif section == 'depot':
+            if line.strip().isdigit(): depot = int(line)
+    
+    dist = np.zeros((max(coords.keys())+1, max(coords.keys())+1))
+    for i in coords:
+        for j in coords:
+            if i != j:
+                dist[i][j] = np.sqrt((coords[i][0]-coords[j][0])2 + (coords[i][1]-coords[j][1])2)
+    
+    return dist, np.array([demands.get(i,0) for i in range(max(coords.keys())+1)]), depot, capacity, dim
+
+# =============================
+# إدخال المعلومات
+# =============================
+print("="*60)
+print("Algorithme Génétique pour CVRP")
+print("="*60)
+
+filename = input("\n1. Nom du fichier VRP: ").strip() or "A-n34-k5.vrp"
+n_veh = input("2. Nombre de véhicules (Enter = auto): ").strip()
+n_vehicles = int(n_veh) if n_veh else int(filename.split('-k')[-1].split('.')[0])
+optimal = input("3. Solution optimale (Enter = skip): ").strip()
+optimal_sol = float(optimal) if optimal else None
+
+distances, demands, depot, capacity, N = read_vrp(filename)
+
+print(f"\n✓ Fichier chargé: {N} points, {n_vehicles} véhicules, capacité {capacity}")
+
+# =============================
+# CVRP: Decoder & Distance
+# =============================
+def decode_routes(perm):
+    routes, route, load = [], [depot], 0
+    for city in perm[1:-1]:
+        if city == depot: continue
+        if load + demands[city] <= capacity:
+            route.append(city)
+            load += demands[city]
+        else:
+            route.append(depot)
+            routes.append(route)
+            route, load = [depot, city], demands[city]
+    if len(route) > 1:
+        route.append(depot)
+        routes.append(route)
+    return routes
+
+def distance_totale(perm):
+    routes = decode_routes(perm)
+    dist = sum(distances[routes[i][j]][routes[i][j+1]] for i in range(len(routes)) for j in range(len(routes[i])-1))
+    return dist + (10000 * (len(routes) - n_vehicles) if len(routes) > n_vehicles else 0)
+
+# =============================
+# GA Original (pas de changement)
+# =============================
+def creer_population(taille):
+    pop = []
+    customers = [i for i in range(N) if i != depot]
+    for _ in range(taille):
+        perm = customers.copy()
+        random.shuffle(perm)
+        pop.append([depot] + perm + [depot])def selection(pop):
+    a, b = random.sample(pop, 2)
+    return a if distance_totale(a) < distance_totale(b) else b
+
+def crossover(p1, p2):
+    a, b = sorted(random.sample(range(1, N), 2))
+    enfant = [depot] * (N+1)
+    enfant[a:b] = p1[a:b]
+    reste = [v for v in p2 if v not in enfant and v != depot]
+    idx = 1
+    for v in reste:
+        while idx < N and enfant[idx] != depot: idx += 1
+        if idx < N: enfant[idx] = v
+    return enfant
+
+def mutation(perm, p=0.05):
+    if random.random() < p:
+        indices = [i for i in range(1, N) if perm[i] != depot]
+        if len(indices) >= 2:
+            i, j = random.sample(indices, 2)
+            perm[i], perm[j] = perm[j], perm[i]
+
+def algorithme_genetique(pop_size=100, generations=500):
+    pop = creer_population(pop_size)
+    best_cost, meilleur = float('inf'), None
+    hist = []
+    
+    for g in range(generations):
+        new_pop = [crossover(selection(pop), selection(pop)) for _ in range(pop_size)]
+        for p in new_pop: mutation(p)
+        pop = new_pop
+        
+        costs = [distance_totale(p) for p in pop]
+        gen_best = min(costs)
+        
+        if gen_best < best_cost:
+            best_cost = gen_best
+            meilleur = pop[costs.index(gen_best)]
+        
+        hist.append(best_cost)
+        if g % 100 == 0: print(f"  Génération {g}: {best_cost:.2f}")
+    
+    return meilleur, best_cost, hist
+
+# =============================
+# Exécution
+# =============================
+print("\n🧬 Lancement de l'AG...")
+solution, cout, history = algorithme_genetique()
+
+# =============================
+# Résultats
+# =============================
+routes = decode_routes(solution)
+
+print("\n" + "="*60)
+print("RÉSULTATS")
+print("="*60)
+print(f"Distance totale: {cout:.2f}")
+print(f"Véhicules utilisés: {len(routes)}/{n_vehicles}")
+if optimal_sol:
+    gap = ((cout - optimal_sol) / optimal_sol) * 100
+    print(f"Solution optimale: {optimal_sol:.2f}")
+    print(f"Gap: {gap:.2f}%")
+
+print(f"\nRoutes:")
+for i, r in enumerate(routes):
+    d = sum(distances[r[j]][r[j+1]] for j in range(len(r)-1))
+    load = sum(demands[c] for c in r if c != depot)
+    print(f"  V{i+1}: {' → '.join(map(str,r))} | Dist:{d:.0f} | Charge:{load}/{capacity}")
+
+# =============================
+# Graphique
+# =============================
+plt.figure(figsize=(10,5))
+plt.plot(history, linewidth=2, color='blue')
+if optimal_sol: plt.axhline(y=optimal_sol, color='green', linestyle='--', label=f'Optimal ({optimal_sol:.0f})')
+plt.xlabel('Génération')
+plt.ylabel('Distance')
+plt.title(f'GA pour CVRP - {filename}')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+print("\n✅ Terminé!")
+
+    return pop
